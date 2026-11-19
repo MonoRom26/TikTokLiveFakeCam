@@ -245,9 +245,25 @@ static BOOL ViewContainsLiveText(UIView *view, int depth) {
     return NO;
 }
 
-static void (*orig_captureOutput)(id, SEL, AVCaptureOutput *, CMSampleBufferRef, AVCaptureConnection *);
+// Original IMPs, keyed by delegate class (TikTok may use more than one delegate class)
+static NSMutableDictionary<NSValue *, NSValue *> *gOrigIMPs = nil;
+
+static IMP OrigIMPForObject(id obj) {
+    @synchronized (gOrigIMPs) {
+        for (Class c = object_getClass(obj); c; c = class_getSuperclass(c)) {
+            NSValue *v = gOrigIMPs[[NSValue valueWithPointer:(__bridge void *)c]];
+            if (v) return (IMP)[v pointerValue];
+        }
+    }
+    return NULL;
+}
+
+typedef void (*CaptureOutputIMP)(id, SEL, AVCaptureOutput *, CMSampleBufferRef, AVCaptureConnection *);
 
 static void hooked_captureOutput(id self, SEL _cmd, AVCaptureOutput *output, CMSampleBufferRef sampleBuffer, AVCaptureConnection *connection) {
+    CaptureOutputIMP orig = (CaptureOutputIMP)OrigIMPForObject(self);
+    if (!orig) return;
+
     if (gFakeCamEnabled && sampleBuffer) {
         CVImageBufferRef imageBuffer = CMSampleBufferGetImageBuffer(sampleBuffer);
         if (imageBuffer) {
@@ -262,3 +278,64 @@ static void hooked_captureOutput(id self, SEL _cmd, AVCaptureOutput *output, CMS
         });
 
         if (fakeBuffer) {
+            orig(self, _cmd, output, fakeBuffer, connection);
+            CFRelease(fakeBuffer);
+            return;
+        }
+    }
+
+    // Fake cam off (or no frame available): pass the real camera frame through
+    orig(self, _cmd, output, sampleBuffer, connection);
+}
+
+static void HookDelegateClass(Class cls) {
+    SEL sel = @selector(captureOutput:didOutputSampleBuffer:fromConnection:);
+    Method m = class_getInstanceMethod(cls, sel);
+    if (!m) return;
+
+    @synchronized (gOrigIMPs) {
+        IMP orig = method_getImplementation(m);
+        if (orig == (IMP)hooked_captureOutput) return; // already hooked (inherited)
+
+        NSValue *key = [NSValue valueWithPointer:(__bridge void *)cls];
+        if (gOrigIMPs[key]) return;
+
+        gOrigIMPs[key] = [NSValue valueWithPointer:(void *)orig];
+        class_replaceMethod(cls, sel, (IMP)hooked_captureOutput, method_getTypeEncoding(m));
+    }
+}
+
+%hook AVCaptureVideoDataOutput
+
+- (void)setSampleBufferDelegate:(id<AVCaptureVideoDataOutputSampleBufferDelegate>)delegate queue:(dispatch_queue_t)queue {
+    if (delegate) {
+        HookDelegateClass([delegate class]);
+    }
+    %orig;
+}
+
+%end
+
+%hook UIViewController
+
+- (void)viewDidAppear:(BOOL)animated {
+    %orig;
+    if (gPromptShownThisSession) return;
+
+    if (ViewContainsLiveText(self.view, 0)) {
+        gPromptShownThisSession = YES;
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            [[FakeCamPickerDelegate sharedInstance] presentSourceMenu];
+        });
+    }
+}
+
+%end
+
+%ctor {
+    @autoreleasepool {
+        gOrigIMPs = [NSMutableDictionary dictionary];
+        [FakeCamPickerDelegate sharedInstance]; // creates gVideoQueue + loads saved path
+        %init;
+    }
+}
