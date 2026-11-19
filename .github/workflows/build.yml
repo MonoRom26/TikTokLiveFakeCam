@@ -19,16 +19,16 @@ jobs:
 
       - name: Clone Theos & iOS 14.5 SDK
         run: |
-          git clone --recursive https://github.com $HOME/theos
-          git clone --depth 1 https://github.com $HOME/sdks-temp
+          git clone --recursive https://github.com/theos/theos.git $HOME/theos
+          git clone --depth 1 https://github.com/theos/sdks.git $HOME/sdks-temp
           mkdir -p $HOME/theos/sdks
           cp -R $HOME/sdks-temp/iPhoneOS14.5.sdk $HOME/theos/sdks/
 
       - name: Build .deb Package
         env:
-          THEOS: ${{ runner.home }}/theos
           THEOS_PACKAGE_SCHEME: ""
         run: |
+          export THEOS=$HOME/theos
           make clean package FINALPACKAGE=1
 
       - name: Upload .deb Artifact
