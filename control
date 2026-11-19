@@ -1,0 +1,9 @@
+Package: com.custom.tiktoklivefakecam
+Name: TikTokLiveFakeCam
+Version: 1.0.0
+Architecture: iphoneos-arm
+Description: Replace TikTok LIVE camera feed with local Photo Library videos on iOS 14.
+Maintainer: Developer
+Author: Developer
+Section: Tweaks
+Depends: mobilesubstrate (>= 0.9.5000), firmware (>= 14.0)
